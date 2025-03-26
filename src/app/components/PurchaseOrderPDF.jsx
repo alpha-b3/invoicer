@@ -1,399 +1,421 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
-import { jsPDF } from "jspdf";
-import autoTable from "jspdf-autotable"; // Add this import
-import { toast } from "react-toastify";
-import { getSupplier } from "@/src/app/services/supplierService";
+import React, { useState } from "react";
+import jsPDF from "jspdf";
+import "jspdf-autotable";
+import logo from "../images/logo.png";
 
-const PurchaseOrderPDF = React.forwardRef(({ purchaseOrder }, ref) => {
-  const [loading, setLoading] = useState(false);
+const PurchaseOrderPDF = ({ purchaseOrder }) => {
   const [pdfPreview, setPdfPreview] = useState(null);
-  const [supplierData, setSupplierData] = useState(null);
 
-  useEffect(() => {
-    const fetchSupplierData = async () => {
-      try {
-        const data = await getSupplier();
-        // Find supplier based on supplier name
-        const filteredSupplier = data.find(
-          (supplier) => supplier.company === purchaseOrder.supplierName
-        );
-        console.log("Filtered supplier:", filteredSupplier); // Debug log
-        setSupplierData(filteredSupplier);
-      } catch (error) {
-        console.error("Error fetching supplier data:", error);
-      }
+  const generatePDF = () => {
+    const doc = new jsPDF();
+
+    // Add Times New Roman font
+    doc.setFont("times", "normal");
+
+    // Update logo dimensions and position
+    const logoUrl = { logo };
+    const logoWidth = 25; // Width in mm
+    const logoHeight = 15; // Height in mm
+    const logoX = 14; // X position from left margin
+    const logoY = 10; // Y position from top margin
+
+    doc.addImage(logoUrl, "PNG", logoX, logoY, logoWidth, logoHeight);
+
+    // Helper function update to use Times New Roman
+    const addText = (doc, text, x, y, fontSize = 12, fontWeight = "normal") => {
+      doc.setFontSize(fontSize);
+      doc.setFont("times", fontWeight);
+      doc.text(text, x, y);
     };
-    fetchSupplierData();
-  }, [purchaseOrder.supplierName]);
 
-  // Add data validation
-  useEffect(() => {
-    if (purchaseOrder) {
-      console.log("PurchaseOrder data received:", purchaseOrder);
-      // Validate required fields
-      const requiredFields = [
-        "poNumber",
-        "supplierName",
-        "items",
-        "terms",
-        "date",
-      ];
+    // Adjust header position to account for logo
+    addText(doc, "PURCHASE ORDER", 75, logoHeight + logoY + 10, 14, "bold");
 
-      const missingFields = requiredFields.filter(
-        (field) => !purchaseOrder[field]
-      );
-      if (missingFields.length > 0) {
-        console.warn("Missing required fields:", missingFields);
-      }
+    // Adjust yOffset to account for logo space
+    const yOffset = logoHeight + 10;
 
-      // Validate items array
-      if (purchaseOrder.items) {
-        console.log("Items data:", purchaseOrder.items);
-        purchaseOrder.items.forEach((item, index) => {
-          if (!item.description || !item.quantity || !item.unitPrice) {
-            console.warn(`Item ${index + 1} is missing required properties`);
-          }
-        });
-      }
+    // Info Section with Boxes - adjusted Y positions
+    doc.rect(14, 20 + yOffset, 180, 7); // Email box
+    addText(doc, "Email", 16, 25 + yOffset, 10);
+    doc.rect(36, 20 + yOffset, 158, 7);
+    addText(doc, purchaseOrder.email, 40, 25 + yOffset, 10);
 
-      // Validate terms object
-      if (purchaseOrder.terms) {
-        console.log("Terms data:", purchaseOrder.terms);
-      }
-    }
-  }, [purchaseOrder]);
+    doc.rect(14, 27 + yOffset, 180, 7); // Date box
+    addText(doc, "Date", 16, 32 + yOffset, 10);
+    doc.rect(36, 27 + yOffset, 158, 7);
+    addText(doc, purchaseOrder.date, 40, 32 + yOffset, 10);
 
-  const generatePDF = React.useCallback(
-    (shouldDownload = false) => {
-      try {
-        setLoading(true);
-        const doc = new jsPDF();
-        doc.setFont("times", "normal");
+    doc.rect(14, 34 + yOffset, 180, 7); // Attn box
+    addText(doc, "Attn", 16, 39 + yOffset, 10);
+    doc.rect(36, 34 + yOffset, 158, 7);
+    addText(doc, purchaseOrder.attn, 40, 39 + yOffset, 10);
 
-        // Add margins for letterhead and footer
-        const topMargin = 20; // Increased top margin for letterhead (in mm)
-        const bottomMargin = 25; // Space for footer (in mm)
-        const pageHeight = doc.internal.pageSize.height;
+    doc.rect(14, 41 + yOffset, 180, 7); // Company box
+    addText(doc, "Company", 16, 46 + yOffset, 10);
+    doc.rect(36, 41 + yOffset, 158, 7);
+    addText(doc, purchaseOrder.company, 40, 46 + yOffset, 10);
 
-        // Helper function for text
-        const addText = (text, x, y, fontSize = 12, fontWeight = "normal") => {
-          if (text) {
-            doc.setFontSize(fontSize);
-            doc.setFont("times", fontWeight);
-            doc.text(text, x, y + topMargin); // Add topMargin to all Y positions
-          }
-        };
+    doc.rect(130, 27 + yOffset, 26, 7); // P/O NO box
+    addText(doc, "P/O NO :", 132, 32 + yOffset, 10);
+    doc.rect(156, 27 + yOffset, 38, 7);
+    addText(doc, purchaseOrder.poNumber, 160, 32 + yOffset, 10);
 
-        // Start position adjusted for letterhead
-        const startY = 20;
-        addText("PURCHASE ORDER", 75, startY, 14, "bold");
+    // --- Quotation Text ---
+    addText(doc, purchaseOrder.quotationText, 14, 55 + yOffset, 10);
 
-        // Info Section with Boxes
-        // Email
-        doc.rect(14, startY + 10 + topMargin, 180, 7);
-        addText("Email", 16, startY + 15, 10);
-        doc.rect(36, startY + 10 + topMargin, 158, 7);
-        addText(supplierData?.email || "", 40, startY + 15, 10);
+    // --- Table ---
+    const tableColumn = [
+      "Item",
+      "Description",
+      "Qty",
+      "Unit Price (LKR)",
+      "Total Price (LKR)",
+    ];
+    const tableRows = purchaseOrder.items.map((item, index) => [
+      index + 1,
+      item.description,
+      item.quantity,
+      item.unitPrice,
+      item.totalPrice,
+    ]);
 
-        // Format the date to show only YYYY-MM-DD
-        const formattedDate = purchaseOrder.date
-          ? new Date(purchaseOrder.date).toISOString().split("T")[0]
-          : "";
+    doc.autoTable({
+      head: [tableColumn],
+      body: tableRows,
+      startY: 65 + yOffset, // Adjusted Y position
+      margin: { horizontal: 14 },
+      columnStyles: {
+        0: { halign: "center", cellWidth: 15, valign: "middle" }, // Item column
+        1: { cellWidth: 80 }, // Description column
+        2: { halign: "center", cellWidth: 15, valign: "middle" }, // Qty column
+        3: { halign: "right", cellWidth: 35, valign: "middle" }, // Unit Price column
+        4: { halign: "right", cellWidth: 35, valign: "middle" }, // Total Price column
+      },
+      styles: {
+        lineColor: [0, 0, 0],
+        lineWidth: 0.2,
+        fontSize: 10,
+        cellPadding: 3,
+        overflow: "linebreak", // Handle text overflow with line breaks
+      },
+      headStyles: {
+        fillColor: [255, 255, 255], // set header background color to white
+        textColor: [0, 0, 0], // set header text color to black
+        fontStyle: "normal", // set header font style to normal
+        halign: "center",
+      },
+    });
 
-        // Date box with formatted date
-        doc.rect(14, startY + 17 + topMargin, 180, 7);
-        addText("Date", 16, startY + 22, 10);
-        doc.rect(36, startY + 17 + topMargin, 158, 7);
-        addText(formattedDate, 40, startY + 22, 10);
+    const finalY = doc.autoTable.previous.finalY;
 
-        // Attendee (using supplier name)
-        doc.rect(14, startY + 24 + topMargin, 180, 7);
-        addText("Attn", 16, startY + 29, 10);
-        doc.rect(36, startY + 24 + topMargin, 158, 7);
-        addText(supplierData?.name || "", 40, startY + 29, 10);
-
-        // Company & Address
-        doc.rect(14, startY + 31 + topMargin, 180, 7);
-        addText("Company", 16, startY + 36, 10);
-        doc.rect(36, startY + 31 + topMargin, 158, 7);
-        const companyWithAddress = supplierData
-          ? `${supplierData.company} - ${supplierData.address}`
-          : "";
-        addText(companyWithAddress, 40, startY + 36, 10);
-
-        // PO Number
-        doc.rect(130, startY + 17 + topMargin, 26, 7);
-        addText("P/O NO :", 132, startY + 22, 10);
-        doc.rect(156, startY + 17 + topMargin, 38, 7);
-        addText(purchaseOrder.poNumber, 160, startY + 22, 10);
-
-        // Remove description from header boxes and add it between header and table
-        const descriptionText = purchaseOrder.description
-          ? `This Purchase Order refers to ${purchaseOrder.description}`
-          : "";
-
-        // Add description text without borders, after header section
-        addText(descriptionText, 14, startY + 45, 10);
-
-        // --- Table ---
-        const currency = purchaseOrder.currency || "LKR";
-        const tableColumn = [
-          // Removed "Item" column
-          "Description",
-          "Qty",
-          `Unit Price (${currency})`,
-          `Total Price (${currency})`,
-        ];
-
-        // Format the items data correctly from purchaseOrder - without line number
-        const tableRows = purchaseOrder.items.map((item) => [
-          // Removed index + 1
-          item.description || "",
-          item.quantity || 0,
-          Number(item.unitPrice || 0).toLocaleString("en-US", {
-            minimumFractionDigits: 2,
-            maximumFractionDigits: 2,
-          }),
-          Number(item.total || 0).toLocaleString("en-US", {
-            minimumFractionDigits: 2,
-            maximumFractionDigits: 2,
-          }),
-        ]);
-
-        doc.autoTable({
-          head: [tableColumn],
-          body: tableRows,
-          startY: startY + 55 + topMargin,
-          margin: {
-            top: topMargin,
-            bottom: bottomMargin,
-            horizontal: 14,
+    // Add the calculation table
+    doc.autoTable({
+      body: [
+        [
+          "",
+          "",
+          "",
+          {
+            content: `Discount (${purchaseOrder.discPercent}%)`,
+            styles: { halign: "left", valign: "middle" },
           },
-          columnStyles: {
-            0: { cellWidth: 95 }, // Increased width for Description
-            1: { halign: "center", cellWidth: 15, valign: "middle" }, // Qty
-            2: { halign: "right", cellWidth: 35, valign: "middle" }, // Unit Price
-            3: { halign: "right", cellWidth: 35, valign: "middle" }, // Total Price
+          purchaseOrder.discount,
+        ],
+        [
+          "",
+          "",
+          "",
+          {
+            content: `VAT (${purchaseOrder.vatPercent}%)`,
+            styles: { halign: "left", valign: "middle" },
           },
-          styles: {
-            lineColor: [0, 0, 0],
-            lineWidth: 0.2,
-            fontSize: 10,
-            cellPadding: 3,
-            overflow: "linebreak", // Handle text overflow with line breaks
+          purchaseOrder.VAT,
+        ],
+        [
+          "",
+          "",
+          "",
+          {
+            content: `TAX (${purchaseOrder.taxPercent}%)`,
+            styles: { halign: "left", valign: "middle" },
           },
-          headStyles: {
-            fillColor: [255, 255, 255], // set header background color to white
-            textColor: [0, 0, 0], // set header text color to black
-            fontStyle: "normal", // set header font style to normal
-            halign: "center",
+          purchaseOrder.TAX,
+        ],
+        [
+          "",
+          "",
+          "",
+          {
+            content: "Sub Total",
+            styles: { halign: "left", valign: "middle" },
           },
-        });
-
-        const finalY = doc.autoTable.previous.finalY;
-
-        // Calculate values based on percentages
-        const subTotal = purchaseOrder.total || 0;
-        const calculationRows = [];
-
-        // Only add discount if percentage or amount exists
-        if (purchaseOrder.DiscountPercentage > 0) {
-          const discountAmount =
-            (subTotal * purchaseOrder.DiscountPercentage) / 100;
-          calculationRows.push([
-            "",
-            "",
-            "",
-            {
-              content: `Discount (${purchaseOrder.DiscountPercentage}%)`,
-              styles: { halign: "left" },
-            },
-            Number(discountAmount).toLocaleString("en-US", {
-              minimumFractionDigits: 2,
-            }),
-          ]);
-        }
-
-        // Only add VAT if percentage exists
-        if (purchaseOrder.VATPercentage > 0) {
-          const vatAmount = (subTotal * purchaseOrder.VATPercentage) / 100;
-          calculationRows.push([
-            "",
-            "",
-            "",
-            {
-              content: `VAT (${purchaseOrder.VATPercentage}%)`,
-              styles: { halign: "left" },
-            },
-            Number(vatAmount).toLocaleString("en-US", {
-              minimumFractionDigits: 2,
-            }),
-          ]);
-        }
-
-        // Only add TAX if percentage exists
-        if (purchaseOrder.TaxPercentage > 0) {
-          const taxAmount = (subTotal * purchaseOrder.TaxPercentage) / 100;
-          calculationRows.push([
-            "",
-            "",
-            "",
-            {
-              content: `TAX (${purchaseOrder.TaxPercentage}%)`,
-              styles: { halign: "left" },
-            },
-            Number(taxAmount).toLocaleString("en-US", {
-              minimumFractionDigits: 2,
-            }),
-          ]);
-        }
-
-        // Add subtotal and total
-        calculationRows.push(
-          [
-            "",
-            "",
-            "",
-            { content: "Sub Total", styles: { halign: "left" } },
-            Number(subTotal).toLocaleString("en-US", {
-              minimumFractionDigits: 2,
-            }),
-          ],
-          [
-            "",
-            "",
-            "",
-            { content: "TOTAL", styles: { halign: "left", fontStyle: "bold" } },
-            Number(purchaseOrder.total).toLocaleString("en-US", {
-              minimumFractionDigits: 2,
-            }),
-          ]
-        );
-
-        // Add the calculation table with reduced spacing
-        doc.autoTable({
-          body: calculationRows,
-          startY: finalY + 1, // Reduced space after items table
-          margin: { horizontal: 14 },
-          tableWidth: 196,
-          columnStyles: {
-            0: { cellWidth: 15 }, // Item
-            1: { cellWidth: 80 }, // Description
-            2: { cellWidth: 15 }, // Qty
-            3: { cellWidth: 35 }, // Label
-            4: { cellWidth: 35, halign: "right", valign: "middle" }, // Amount
+          purchaseOrder.subTotal,
+        ],
+        [
+          "",
+          "",
+          "",
+          {
+            content: "TOTAL",
+            styles: { halign: "left", valign: "middle", fontStyle: "bold" },
           },
-          styles: {
-            fontSize: 10,
-            lineColor: [255, 255, 255],
-            cellPadding: 2,
-          },
-          showHead: false,
-        });
+          purchaseOrder.total,
+        ],
+      ],
+      startY: finalY + 1,
+      margin: { horizontal: 14 },
+      tableWidth: 196,
+      columnStyles: {
+        0: { cellWidth: 15 }, // Item
+        1: { cellWidth: 80 }, // Description
+        2: { cellWidth: 15 }, // Qty
+        3: { cellWidth: 35 }, // Label
+        4: { cellWidth: 35, halign: "right", valign: "middle" }, // Amount
+      },
+      styles: {
+        fontSize: 10,
+        lineColor: [255, 255, 255],
+        cellPadding: 2,
+      },
+      showHead: false,
+    });
 
-        // Update the Terms and Conditions section with aligned labels
-        const calculationTableFinalY = doc.autoTable.previous.finalY;
-        let termsY = calculationTableFinalY + 1;
+    // Update the Terms and Conditions starting position
+    const calculationTableFinalY = doc.autoTable.previous.finalY;
+    addText(
+      doc,
+      "Terms and conditions",
+      14,
+      calculationTableFinalY + 10,
+      11,
+      "underline"
+    );
+    let termsY = calculationTableFinalY + 17;
 
-        // Define terms with proper spacing for alignment
-        const termsLabels = {
-          payment: "Payment        ",
-          warranty: "Warranty       ",
-          amc: "AMC            ",
-          delivery: "Delivery        ",
-          installation: "Installation   ",
-          validity: "Validity        ",
-        };
+    purchaseOrder.terms.forEach((term) => {
+      addText(doc, `• ${term}`, 14, termsY, 11);
+      termsY += 5;
+    });
 
-        const terms = Object.entries(purchaseOrder.terms || {})
-          .filter(([_, value]) => value && value.trim() !== "")
-          .map(([key, value]) => ({
-            label: termsLabels[key] || key,
-            value: value,
-          }));
+    // --- Footer ---
+    addText(doc, "Thank you.", 14, termsY + 15, 11);
+    addText(doc, "Yours truly,", 14, termsY + 19, 11);
+    doc.line(14, termsY + 30, 50, termsY + 30);
+    addText(doc, purchaseOrder.signatureName, 14, termsY + 35, 11);
+    addText(doc, purchaseOrder.signatureTitle, 14, termsY + 40, 11);
 
-        if (terms.length > 0) {
-          addText(
-            "Terms and conditions",
-            14,
-            calculationTableFinalY + 2,
-            11,
-            "underline"
-          );
-
-          termsY = calculationTableFinalY + 6;
-          terms.forEach((term) => {
-            addText(`${term.label}: ${term.value}`, 14, termsY, 11);
-            termsY += 4;
-          });
-        }
-
-        // Add some padding even if there are no terms (reduced)
-        termsY = terms.length > 0 ? termsY : calculationTableFinalY + 3;
-
-        // Ensure footer doesn't overlap with bottom margin
-        const availableHeight = pageHeight - bottomMargin;
-        if (termsY + 30 > availableHeight) {
-          doc.addPage();
-          termsY = topMargin;
-        }
-
-        // --- Footer with specific formatting ---
-        addText("Thank you", 14, termsY + 25, 11);
-        addText("Yours Truly,", 14, termsY + 30, 11);
-
-        // Add line for signature
-        // doc.line(14, termsY + 35, 50, termsY + 35);
-
-        // Add signature name and title with underscore prefix
-        addText("_________________", 14, termsY + 40, 11);
-        addText(purchaseOrder.signatureName, 14, termsY + 45, 11);
-        addText(purchaseOrder.signatureTitle, 14, termsY + 50, 11);
-
-        if (shouldDownload) {
-          doc.save(`PurchaseOrder_${purchaseOrder.poNumber}.pdf`);
-        } else {
-          const pdfBlob = doc.output("blob");
-          const pdfUrl = URL.createObjectURL(pdfBlob);
-          setPdfPreview(pdfUrl);
-        }
-      } catch (error) {
-        console.error("PDF generation error:", error);
-        console.error("Description data:", {
-          description: purchaseOrder.description,
-          error: error.message,
-        });
-        toast.error("Failed to generate PDF. Please try again.");
-      } finally {
-        setLoading(false);
-      }
-    },
-    [purchaseOrder, supplierData]
-  );
-
-  React.useImperativeHandle(ref, () => ({
-    generatePDF,
-  }));
+    // Instead of saving, create a data URL
+    const pdfBlob = doc.output("dataurlstring");
+    setPdfPreview(pdfBlob);
+  };
 
   return (
     <div className="flex flex-col gap-4">
       <div className="flex gap-4">
         <button
-          onClick={() => generatePDF(false)}
+          onClick={generatePDF}
           className="bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded"
-          disabled={loading}
         >
-          {loading ? "Generating..." : "Preview PDF"}
+          Preview PDF
         </button>
         {pdfPreview && (
           <button
-            onClick={() => generatePDF(true)}
+            onClick={() => {
+              const doc = new jsPDF();
+
+              // --- Helper function to add text with consistent styling ---
+              const addText = (
+                doc,
+                text,
+                x,
+                y,
+                fontSize = 12,
+                fontWeight = "normal"
+              ) => {
+                doc.setFontSize(fontSize);
+                doc.setFont(undefined, fontWeight);
+                doc.text(text, x, y);
+              };
+
+              // --- Header ---
+              addText(doc, "PURCHASE ORDER", 75, 14, 14, "bold"); // Centered and slightly down
+
+              // --- Info Section with Boxes ---
+              doc.rect(14, 20, 70, 7); // Email box
+              addText(doc, "Email", 16, 25, 10);
+              addText(doc, purchaseOrder.email, 40, 25, 10);
+
+              doc.rect(14, 27, 70, 7); // Date box
+              addText(doc, "Date", 16, 32, 10);
+              addText(doc, purchaseOrder.date, 40, 32, 10);
+
+              doc.rect(14, 34, 70, 7); // Attn box
+              addText(doc, "Attn", 16, 39, 10);
+              addText(doc, purchaseOrder.attn, 40, 39, 10);
+
+              doc.rect(14, 41, 70, 7); // Company box
+              addText(doc, "Company", 16, 46, 10);
+              addText(doc, purchaseOrder.company, 40, 46, 10);
+
+              doc.rect(130, 20, 60, 7); // P/O NO box
+              addText(doc, "P/O NO", 132, 25, 10);
+              addText(doc, purchaseOrder.poNumber, 160, 25, 10);
+
+              // --- Quotation Text ---
+              addText(doc, purchaseOrder.quotationText, 14, 55, 10);
+
+              // --- Table ---
+              const tableColumn = [
+                "Item",
+                "Description",
+                "Qty",
+                "Unit Price (LKR)",
+                "Total Price (LKR)",
+              ];
+              const tableRows = purchaseOrder.items.map((item, index) => [
+                index + 1,
+                item.description,
+                item.quantity,
+                item.unitPrice,
+                item.totalPrice,
+              ]);
+
+              doc.autoTable({
+                head: [tableColumn],
+                body: tableRows,
+                startY: 60, // Adjusted Y position
+                margin: { horizontal: 14 },
+                columnStyles: {
+                  0: { halign: "center", cellWidth: 15, valign: "middle" }, // Item column
+                  1: { cellWidth: 80 }, // Description column
+                  2: { halign: "center", cellWidth: 15, valign: "middle" }, // Qty column
+                  3: { halign: "right", cellWidth: 35, valign: "middle" }, // Unit Price column
+                  4: { halign: "right", cellWidth: 35, valign: "middle" }, // Total Price column
+                },
+                styles: {
+                  lineColor: [0, 0, 0],
+                  lineWidth: 0.2,
+                  fontSize: 10,
+                  cellPadding: 3,
+                  overflow: "linebreak", // Handle text overflow with line breaks
+                },
+                headStyles: {
+                  fillColor: [255, 255, 255], // set header background color to white
+                  textColor: [0, 0, 0], // set header text color to black
+                  fontStyle: "normal", // set header font style to normal
+                  halign: "center",
+                },
+              });
+
+              const finalY = doc.autoTable.previous.finalY;
+
+              // Add the calculation table
+              doc.autoTable({
+                body: [
+                  [
+                    "",
+                    "",
+                    "",
+                    {
+                      content: "Discount (10%)",
+                      styles: { halign: "center", valign: "middle" },
+                    },
+                    purchaseOrder.discount,
+                  ],
+                  [
+                    "",
+                    "",
+                    "",
+                    {
+                      content: "VAT (15%)",
+                      styles: { halign: "center", valign: "middle" },
+                    },
+                    purchaseOrder.VAT,
+                  ],
+                  [
+                    "",
+                    "",
+                    "",
+                    {
+                      content: "TAX (2%)",
+                      styles: { halign: "center", valign: "middle" },
+                    },
+                    purchaseOrder.TAX,
+                  ],
+                  [
+                    "",
+                    "",
+                    "",
+                    {
+                      content: "Sub Total",
+                      styles: { halign: "center", valign: "middle" },
+                    },
+                    purchaseOrder.subTotal,
+                  ],
+                  [
+                    "",
+                    "",
+                    "",
+                    {
+                      content: "TOTAL",
+                      styles: {
+                        halign: "center",
+                        valign: "middle",
+                        fontStyle: "bold",
+                      },
+                    },
+                    purchaseOrder.total,
+                  ],
+                ],
+                startY: finalY + 2,
+                margin: { horizontal: 14 },
+                tableWidth: 196,
+                columnStyles: {
+                  0: { cellWidth: 15 }, // Item
+                  1: { cellWidth: 80 }, // Description
+                  2: { cellWidth: 15 }, // Qty
+                  3: { cellWidth: 35 }, // Label
+                  4: { cellWidth: 35, halign: "right", valign: "middle" }, // Amount
+                },
+                styles: {
+                  fontSize: 10,
+                  lineColor: [255, 255, 255],
+                  cellPadding: 2,
+                },
+                showHead: false,
+              });
+
+              // Update the Terms and Conditions starting position
+              const calculationTableFinalY = doc.autoTable.previous.finalY;
+              addText(
+                doc,
+                "Terms and conditions",
+                14,
+                calculationTableFinalY + 10,
+                10,
+                "underline"
+              );
+              let termsY = calculationTableFinalY + 17;
+
+              purchaseOrder.terms.forEach((term) => {
+                addText(doc, `• ${term}`, 14, termsY, 10);
+                termsY += 7;
+              });
+
+              // --- Footer ---
+              addText(doc, "Thank you.", 14, termsY + 10, 10);
+              addText(doc, "Yours truly,", 14, termsY + 17, 10);
+              doc.line(14, termsY + 20, 50, termsY + 20);
+              addText(doc, purchaseOrder.signatureName, 14, termsY + 24, 10);
+              addText(doc, purchaseOrder.signatureTitle, 14, termsY + 31, 10);
+
+              doc.save(`PurchaseOrder_${purchaseOrder.poNumber}.pdf`);
+            }}
             className="bg-green-500 hover:bg-green-700 text-white font-bold py-2 px-4 rounded"
-            disabled={loading}
           >
-            {loading ? "Generating..." : "Download PDF"}
+            Download PDF
           </button>
         )}
       </div>
@@ -410,8 +432,6 @@ const PurchaseOrderPDF = React.forwardRef(({ purchaseOrder }, ref) => {
       )}
     </div>
   );
-});
-
-PurchaseOrderPDF.displayName = "PurchaseOrderPDF";
+};
 
 export default PurchaseOrderPDF;

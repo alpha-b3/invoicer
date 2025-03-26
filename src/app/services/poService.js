@@ -5,27 +5,20 @@ import {
   LASTPONO,
   UPDATEPO,
   GETPODETAILS,
+  // DEPARTMENTS,
 } from "../api/api";
 
 export const getLastPONumber = async () => {
   try {
-    const response = await fetch(getApiUrl(LASTPONO), {
-      method: "GET",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${localStorage.getItem("token")}`,
-      },
-    });
-
+    const response = await fetch(getApiUrl(LASTPONO));
     if (!response.ok) {
-      throw new Error("Network response was not ok");
+      throw new Error("Failed to fetch last PO number");
     }
-
     const data = await response.json();
-    return data;
+    return data.poNumber;
   } catch (error) {
-    console.error("Error fetching PO number:", error);
-    return { poNumber: new Date().getFullYear() + "/0001" };
+    console.error("Error fetching last PO number:", error);
+    throw error;
   }
 };
 
@@ -175,3 +168,18 @@ export const getPOForPDF = async (poId) => {
     throw error;
   }
 };
+// export const getDepartments = async () => {
+//   try {
+//     const apiUrl = getApiUrl(DEPARTMENTS);
+//     const response = await fetch(apiUrl);
+//     if (response.ok) return await response.json();
+//     else {
+//       const error = await response.json();
+//       console.error("Error:", error);
+//       throw new Error(error.message || "Failed to fetch departments");
+//     }
+//   } catch (error) {
+//     console.error("Error fetching departments:", error);
+//     throw error;
+//   }
+// };
