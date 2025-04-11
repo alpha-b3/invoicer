@@ -4,38 +4,68 @@ import React, { useState, useEffect } from "react";
 import DatePicker from "react-datepicker";
 import "react-datepicker/dist/react-datepicker.css";
 import { HiOutlinePlusCircle, HiOutlinePlusSmall } from "react-icons/hi2";
-import { getLastDocNo, handleSubmit } from "../services/invoiceServices";
+import { createPurchaseOrder } from "../services/poService";
 import { getSupplier } from "../services/supplierService";
 import { toast, ToastContainer } from "react-toastify";
 import "react-toastify/dist/ReactToastify.css";
-import { getUser } from "../services/userService";
 import { useAuth } from "@/src/context/AuthContext";
 import Link from "next/link";
 import { Tooltip } from "react-tooltip";
 import "react-tooltip/dist/react-tooltip.css";
 import { PuffLoader } from "react-spinners";
+import { getLastPONumber } from "../services/poService";
+import { LuPlus, LuTrash2 } from "react-icons/lu";
 
 const POForm = () => {
   const [isFormVisible, setIsFormVisible] = useState(false);
-  const [handoverDate, setHandoverDate] = useState(null);
   const [invoiceDate, setInvoiceDate] = useState(null);
-  const [amount, setAmount] = useState("");
-  const [isAdvancePayment, setIsAdvancePayment] = useState(false); // Change to boolean
-  const [isComplete, setIsComplete] = useState(true);
-  const [paymentType, setPaymentType] = useState("advance");
   const [currencyType, setCurrencyType] = useState("LKR");
-  const [image, setImage] = useState(null);
-  const [invoiceNo, setInvoiceNo] = useState("");
-  const [docNo, setDocNo] = useState("");
-  const [imageBinary, setImageBinary] = useState(null);
   const [suppliers, setSuppliers] = useState([]);
-  const [receivers, setReceivers] = useState([]);
   const [selectedSupplier, setSelectedSupplier] = useState("");
-  const [selectedReceiver, setSelectedReceiver] = useState("");
   const [remark, setRemark] = useState("");
-  const [showInvoiceModal, setShowInvoiceModal] = useState(false);
-  const [enterInvoiceNumber, setEnterInvoiceNumber] = useState("");
-  const [isDocNoLoading, setIsDocNoLoading] = useState(true);
+  const [isPoNumberLoading, setIsPoNumberLoading] = useState(true);
+  const [poNumber, setPoNumber] = useState("");
+  const [amount, setAmount] = useState("");
+
+  const [items, setItems] = useState([
+    { description: "", quantity: 1, unitPrice: 0, totalPrice: 0 },
+  ]);
+
+  const [calculations, setCalculations] = useState({
+    subtotal: 0,
+    discountType: "percentage",
+    discountValue: 0,
+    vatType: "percentage",
+    vatValue: 0,
+    taxType: "percentage",
+    taxValue: 0,
+    total: 0,
+  });
+
+  const [formData, setFormData] = useState({
+    poNumber: "",
+    description: "",
+    transactionType: "",
+    attendee: "",
+    terms: {
+      payment: "",
+      warranty: "",
+      amc: "",
+      delivery: "",
+      installation: "",
+      validity: "",
+    },
+  });
+
+  const handleTermChange = (field, value) => {
+    setFormData((prev) => ({
+      ...prev,
+      terms: {
+        ...prev.terms,
+        [field]: value,
+      },
+    }));
+  };
 
   const { user } = useAuth();
 
@@ -48,42 +78,42 @@ const POForm = () => {
       console.error("Error fetching suppliers", error);
     }
   };
-  const fetchReceivers = async () => {
-    try {
-      const response = await getUser();
-      setReceivers(response.data || response);
-    } catch (error) {
-      toast.error("Error fetching suppliers");
-      console.error("Error fetching suppliers", error);
-    }
-  };
-  const fetchNewDocNo = async () => {
-    try {
-      setIsDocNoLoading(true);
-      const response = await getLastDocNo();
 
-      if (response && response.newDocNo) {
-        setDocNo(response.newDocNo);
-        return response.newDocNo;
+  const fetchPONumber = async () => {
+    try {
+      setIsPoNumberLoading(true);
+      const newPoNumber = await getLastPONumber();
+      if (newPoNumber) {
+        setPoNumber(newPoNumber);
+        setFormData((prev) => ({
+          ...prev,
+          poNumber: newPoNumber,
+        }));
+      } else {
+        toast.error("Failed to generate PO number");
       }
-      return null;
     } catch (error) {
-      console.error("Error fetching newDocNo:", error);
-      return null;
+      console.error("Error fetching PO number:", error);
+      toast.error("Failed to generate PO number");
     } finally {
-      setIsDocNoLoading(false);
+      setIsPoNumberLoading(false);
     }
   };
 
   useEffect(() => {
     const initializeData = async () => {
       try {
-        await Promise.all([fetchSuppliers(), fetchReceivers()]);
+        const [suppliersResponse, poNumber] = await Promise.all([
+          fetchSuppliers(),
+          fetchPONumber(),
+        ]);
 
-        const newDocNo = await fetchNewDocNo();
-        if (!newDocNo) {
-          console.error("Failed to fetch document number");
-          toast.error("Failed to fetch the document number from the server.");
+        // Set the PO number in formData
+        if (poNumber) {
+          setFormData((prev) => ({
+            ...prev,
+            poNumber: poNumber,
+          }));
         }
       } catch (error) {
         console.error("Error initializing data", error);
@@ -94,143 +124,268 @@ const POForm = () => {
     initializeData();
   }, []);
 
-  const paymentTerms = ["Due on Receipt", "Net 30", "Net 60", "Custom Terms"];
-
   const validateForm = () => {
-    if (!docNo) {
-      toast.error("Document number is not available. Please try again.");
+    if (!selectedSupplier) {
+      toast.error("Please select a supplier");
       return false;
     }
-    if (!amount) {
-      toast.error("Amount is required");
+    if (!formData.transactionType) {
+      toast.error("Please select a transaction type");
       return false;
     }
-    if (!handoverDate) {
-      toast.error("Handover date is required");
+    if (!formData.attendee) {
+      toast.error("Please enter attendee");
       return false;
     }
-    if (!image) {
-      toast.error("Please upload an image");
+    if (!invoiceDate) {
+      toast.error("Please select a date");
+      return false;
+    }
+    if (items.length === 0) {
+      toast.error("Please add at least one item");
+      return false;
+    }
+    if (
+      items.some(
+        (item) => !item.description || !item.quantity || !item.unitPrice
+      )
+    ) {
+      toast.error("Please fill in all item details");
+      return false;
+    }
+    if (calculations.total === 0) {
+      toast.error("Total amount cannot be zero");
       return false;
     }
     return true;
-  };
-
-  const handleNewButtonClick = () => {
-    setIsFormVisible(true);
-  };
-
-  const validateUpdateInput = () => {
-    if (!enterInvoiceNumber.trim()) {
-      toast.error("Invoice number cannot be empty for an update.");
-      return false;
-    }
-    return true;
-  };
-
-  const handleModelSubmit = () => {
-    if (!validateUpdateInput()) return;
-
-    setInvoiceNo(enterInvoiceNumber);
-    setIsFormVisible(true);
-    setShowInvoiceModal(false);
-  };
-
-  const handleFileChange = (e) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      setImage(file);
-    }
-
-    if (file) {
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        const base64data = reader.result;
-        if (typeof base64data === "string") {
-          const binaryData = base64data.split(",")[1];
-          setImageBinary(binaryData);
-        } else {
-          console.error("Failed to read the file as a Base64 string");
-        }
-      };
-      reader.readAsDataURL(file);
-    } else {
-      console.error("No file selected");
-    }
   };
 
   const formatAmount = (value) => {
     if (!value) return "";
-
     const numericValue = value.toString().replace(/[^\d.]/g, "");
-
     const parts = numericValue.split(".");
-    if (parts.length > 2) return amount;
-
+    if (parts.length > 2) return value;
     const integerPart = parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, ",");
     const decimalPart = parts.length > 1 ? "." + parts[1] : "";
-
     return `${integerPart}${decimalPart}`;
+  };
+
+  const addItem = () => {
+    setItems([
+      ...items,
+      { description: "", quantity: 1, unitPrice: 0, totalPrice: 0 },
+    ]);
+  };
+
+  const updateItem = (index, field, value) => {
+    const newItems = [...items];
+    let newValue = value;
+    if (field === "unitPrice") {
+      const numericValue = value.toString().replace(/,/g, "");
+      newValue = numericValue || 0;
+      newItems[index] = {
+        ...newItems[index],
+        [field]: newValue,
+        totalPrice: (newItems[index].quantity || 0) * parseFloat(newValue),
+      };
+    } else if (field === "quantity") {
+      newValue = parseFloat(value) || 0;
+      newItems[index] = {
+        ...newItems[index],
+        [field]: newValue,
+        totalPrice: newValue * parseFloat(newItems[index].unitPrice || 0),
+      };
+    } else {
+      newItems[index] = {
+        ...newItems[index],
+        [field]: newValue,
+      };
+    }
+    setItems(newItems);
+    calculateTotals(newItems);
+  };
+
+  const handleFloatInput = (e, field) => {
+    let value = e.target.value;
+
+    // Only allow numbers and one decimal point
+    if (value === "" || /^\d*\.?\d*$/.test(value)) {
+      setCalculations((prev) => ({
+        ...prev,
+        [field]: value,
+      }));
+
+      // Convert to number for calculations
+      const numericValue = value === "" ? 0 : parseFloat(value);
+      setCalculations((prev) => ({
+        ...prev,
+        [field]: value, // Keep the string value for display
+        [`${field}Number`]: numericValue, // Store numeric value for calculations
+      }));
+
+      // Use the numeric value for calculations
+      calculateTotals(items, {
+        ...calculations,
+        [field]: numericValue,
+      });
+    }
+  };
+
+  const calculateTotals = (currentItems, overrideCalculations = null) => {
+    const calcToUse = overrideCalculations || calculations;
+    const subtotal = currentItems.reduce(
+      (sum, item) => sum + (item.totalPrice || 0),
+      0
+    );
+
+    const discountAmount =
+      calcToUse.discountType === "percentage"
+        ? (subtotal * parseFloat(calcToUse.discountValue || 0)) / 100
+        : parseFloat(calcToUse.discountValue || 0);
+
+    const vatAmount =
+      calcToUse.vatType === "percentage"
+        ? (subtotal * parseFloat(calcToUse.vatValue || 0)) / 100
+        : parseFloat(calcToUse.vatValue || 0);
+
+    const taxAmount =
+      calcToUse.taxType === "percentage"
+        ? (subtotal * parseFloat(calcToUse.taxValue || 0)) / 100
+        : parseFloat(calcToUse.taxValue || 0);
+
+    const total = subtotal - discountAmount + vatAmount + taxAmount;
+
+    setCalculations((prev) => ({
+      ...prev,
+      subtotal,
+      discountAmount,
+      vatAmount,
+      taxAmount,
+      total,
+    }));
   };
 
   const onFormSubmit = async (e) => {
     e.preventDefault();
-
     if (!validateForm()) {
       return;
     }
-
-    const numericAmount = parseFloat(amount.replace(/,/g, "")) || 0;
-
-    const invoiceData = {
-      invoiceNo: invoiceNo,
-      invoiceDate: invoiceDate,
-      docNo: docNo,
-      amount: numericAmount,
-      currency: currencyType,
-      paymentTerms: paymentType,
-      handoverDate: (handoverDate ?? new Date()).toISOString().split("T")[0],
-      handoverTo: selectedReceiver,
-      createdBy: user?.username || "Guest",
-      isAdvancePayment: isAdvancePayment,
-      isComplete: isComplete,
-      remarks: remark,
-      supplierId: selectedSupplier,
-      imageBinary: imageBinary,
-      DID: localStorage.getItem("DID"),
-    };
-
-    console.log("Submitting invoice data:", invoiceData);
-
     try {
-      const result = await handleSubmit(invoiceData);
+      const poData = {
+        PONumber: formData.poNumber,
+        SID: parseInt(selectedSupplier),
+        DID: parseInt(localStorage.getItem("DID")),
+        Attendee: formData.attendee,
+        Description: formData.description,
+        QuotationDate: invoiceDate,
+        Currency: currencyType,
+        Status: 1,
+        Total: calculations.total,
+        isCreated: 1,
+        isApproved: 0,
+        isCancelled: 0,
+        isPrinted: 0,
+        Remark: remark,
+        Type: formData.transactionType,
+        DiscountPercentage:
+          calculations.discountType === "percentage"
+            ? parseFloat(calculations.discountValue)
+            : 0,
+        DiscountAmount:
+          calculations.discountType === "fixed"
+            ? parseFloat(calculations.discountValue)
+            : 0,
+        VATPercentage:
+          calculations.vatType === "percentage"
+            ? parseFloat(calculations.vatValue)
+            : 0,
+        VATAmount:
+          calculations.vatType === "fixed"
+            ? parseFloat(calculations.vatValue)
+            : 0,
+        TaxPercentage:
+          calculations.taxType === "percentage"
+            ? parseFloat(calculations.taxValue)
+            : 0,
+        TaxAmount:
+          calculations.taxType === "fixed"
+            ? parseFloat(calculations.taxValue)
+            : 0,
+        items: items.map((item, index) => ({
+          Description: item.description,
+          LineID: index + 1,
+          Qty: parseFloat(item.quantity),
+          UnitPrice: parseFloat(item.unitPrice),
+          Total: parseFloat(item.totalPrice),
+          PaymenTerms: formData.terms.payment,
+          Warranty: formData.terms.warranty,
+          AMCTerms: formData.terms.amc,
+          DeliveryTerms: formData.terms.delivery,
+          Installation: formData.terms.installation,
+          Validity: formData.terms.validity,
+        })),
+      };
 
+      console.log("Submitting PO data:", poData); // Debug log
+      const result = await createPurchaseOrder(poData);
       if (result) {
-        toast.success("Invoice created successfully");
-
-        setAmount("");
-        setIsAdvancePayment(false);
-        setIsComplete(false);
-        setImage(null);
-        setImageBinary(null);
-        setInvoiceNo("");
-        setHandoverDate(null);
-        setInvoiceDate(null);
+        toast.success("Purchase Order created successfully");
+        // Reset form
+        setItems([
+          { description: "", quantity: 1, unitPrice: 0, totalPrice: 0 },
+        ]);
+        setCalculations({
+          subtotal: 0,
+          discountType: "percentage",
+          discountValue: 0,
+          vatType: "percentage",
+          vatValue: 0,
+          taxType: "percentage",
+          taxValue: 0,
+          total: 0,
+        });
         setSelectedSupplier("");
-        setSelectedReceiver("");
         setRemark("");
-
-        const newDocNo = await fetchNewDocNo();
-        if (newDocNo) {
-          setDocNo(newDocNo);
-        } else {
-          toast.error("Failed to generate new document number");
-        }
+        setInvoiceDate(null);
+        setFormData((prev) => ({
+          ...prev,
+          description: "",
+          attendee: "",
+          transactionType: "",
+          terms: {
+            payment: "",
+            warranty: "",
+            amc: "",
+            delivery: "",
+            installation: "",
+            validity: "",
+          },
+        }));
       }
     } catch (error) {
       console.error("Error submitting form:", error);
-      toast.error("Failed to create invoice");
+      toast.error(error.message || "Failed to create purchase order");
     }
+  };
+
+  const handleNewButtonClick = () => {
+    setIsFormVisible(true);
+    setFormData({
+      ...formData,
+      poNumber: "",
+      description: "",
+      transactionType: "",
+      attendee: "",
+      terms: {
+        payment: "",
+        warranty: "",
+        amc: "",
+        delivery: "",
+        installation: "",
+        validity: "",
+      },
+    });
+    fetchPONumber();
   };
 
   return (
@@ -256,360 +411,523 @@ const POForm = () => {
         </div>
       </div>
 
-      {showInvoiceModal && (
-        <div className="fixed inset-0 flex items-center justify-center z-50 bg-black bg-opacity-50">
-          <div className="bg-white p-4 rounded-lg shadow-lg w-1/3">
-            <h2 className="text-lg font-semibold mb-4">Enter invoice number</h2>
-            <input
-              type="text"
-              value={enterInvoiceNumber}
-              className="w-full p-2 border rounded mb-4"
-              onChange={(e) => setEnterInvoiceNumber(e.target.value)}
-              placeholder="Invoice Number"
-            />
-            <div className="flex justify-end gap-2">
-              <button
-                className="bg-gray-500 text-white px-4 py-2 rounded"
-                onClick={() => setShowInvoiceModal(false)}
-              >
-                Cancel
-              </button>
-              <button
-                className="bg-blue-500 text-white px-4 py-2 rounded"
-                onClick={handleModelSubmit}
-              >
-                Submit
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
       {isFormVisible && (
-        <form
-          className="p-4 border border-cyan-600 rounded-xl"
-          onSubmit={onFormSubmit}
-        >
-          <div className="space-y-12 ">
-            <div className="border-b border-gray-900/10 pb-12">
-              <div className="mt-10 md:grid flex flex-col grid-cols-4 gap-x-6 gap-y-8 sm:grid-cols-6">
-                <div className="sm:col-span-2">
-                  <label className="flex items-center  gap-2 text-sm font-medium leading-6 text-gray-900">
-                    Supplier
-                    <div>
-                      <Link href={"/suppliers"}>
-                        <HiOutlinePlusCircle
-                          className="text-blue-500 text-lg cursor-pointer"
-                          data-tooltip-id="supplier-tooltip"
-                          data-tooltip-content="Add Supplier"
+        <form onSubmit={onFormSubmit}>
+          <div className="p-4 border border-cyan-600 rounded-xl">
+            <div className="space-y-8">
+              <div className="pb-8">
+                <div className="mt-5 md:grid flex flex-col grid-cols-4 gap-x-6 gap-y-8 sm:grid-cols-6">
+                  <div className="sm:col-span-2">
+                    <label className="flex items-center gap-2 text-sm font-medium leading-6 text-gray-900">
+                      Supplier
+                      <div>
+                        <Link href={"/suppliers"}>
+                          <HiOutlinePlusCircle
+                            className="text-blue-500 text-lg cursor-pointer"
+                            data-tooltip-id="supplier-tooltip"
+                            data-tooltip-content="Add Supplier"
+                          />
+                        </Link>
+                        <Tooltip
+                          id="supplier-tooltip"
+                          place="top"
+                          effect="solid"
                         />
-                      </Link>
-                    </div>
-                    <Tooltip id="supplier-tooltip" place="top" effect="solid" />
-                  </label>
-                  <div className="mt-2">
-                    <select
-                      value={selectedSupplier}
-                      onChange={(e) => setSelectedSupplier(e.target.value)}
-                      className="block w-full rounded-md border border-cyan-600 py-1.5 px-2 text-gray-900"
-                    >
-                      <option value="" disabled>
-                        Select a supplier
-                      </option>
-                      {suppliers && suppliers.length > 0 ? (
-                        suppliers.map((item) => (
-                          <option key={item.id} value={item.id}>
-                            {item.company}
-                          </option>
-                        ))
-                      ) : (
+                      </div>
+                    </label>
+                    <div className="mt-2">
+                      <select
+                        value={selectedSupplier}
+                        onChange={(e) => setSelectedSupplier(e.target.value)}
+                        className="block w-full rounded-md border border-cyan-600 py-1.5 px-2 text-gray-900"
+                      >
                         <option value="" disabled>
-                          No suppliers available
+                          Select a supplier
                         </option>
-                      )}
-                    </select>
+                        {suppliers && suppliers.length > 0 ? (
+                          suppliers.map((item) => (
+                            <option key={item.id} value={item.id}>
+                              {item.company}
+                            </option>
+                          ))
+                        ) : (
+                          <option value="" disabled>
+                            No suppliers available
+                          </option>
+                        )}
+                      </select>
+                    </div>
                   </div>
-                </div>
-
-                <div className="sm:col-span-2">
-                  <label className="block text-sm font-medium leading-6 text-gray-900">
-                    PO No
-                  </label>
-                  <div className="mt-2">
-                    <div className="relative">
+                  <div className="sm:col-span-2">
+                    <label className="block text-sm font-medium leading-6 text-gray-900">
+                      PO Number
+                    </label>
+                    <div className="mt-2">
+                      <div className="relative">
+                        <input
+                          type="text"
+                          value={formData.poNumber}
+                          readOnly
+                          disabled
+                          placeholder="Loading..."
+                          className="block w-full rounded-md border border-cyan-600 py-1.5 px-2 text-gray-900"
+                        />
+                        {isPoNumberLoading && (
+                          <div className="absolute right-2 top-1/2 transform -translate-y-1/2">
+                            <PuffLoader size={20} color="#6366f1" />
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="sm:col-span-2">
+                    <label className="block text-sm font-medium leading-6 text-gray-900">
+                      Quotation Date
+                    </label>
+                    <div className="mt-2 w-full">
+                      <DatePicker
+                        selected={invoiceDate}
+                        onChange={(date) => setInvoiceDate(date)}
+                        className="block w-full rounded-md border border-cyan-600 py-1.5 px-2 text-gray-900"
+                        dateFormat="yyyy-MM-dd"
+                        maxDate={new Date()}
+                        placeholderText="Select Quotation Date"
+                        isClearable
+                        showMonthDropdown
+                        showYearDropdown
+                        dropdownMode="scroll"
+                      />
+                    </div>
+                  </div>
+                  <div className="sm:col-span-2">
+                    <label className="block text-sm font-medium leading-6 text-gray-900">
+                      Amount
+                    </label>
+                    <div className="mt-2">
                       <input
                         type="text"
-                        value={docNo}
-                        readOnly
                         disabled
-                        placeholder="Loading..."
-                        className="block w-full rounded-md border border-cyan-600 py-1.5 px-2 text-gray-900"
+                        value={formatAmount(calculations.total)}
+                        onChange={(e) => {
+                          const value = e.target.value.replace(/,/g, "");
+                          if (!isNaN(value) || value === "" || value === ".") {
+                            setAmount(value);
+                          }
+                        }}
+                        onBlur={(e) => {
+                          const rawValue = e.target.value.replace(/,/g, "");
+                          if (rawValue) {
+                            const numericValue = parseFloat(rawValue) || 0;
+                            setAmount(numericValue.toFixed(2));
+                          }
+                        }}
+                        className="block w-full rounded-md border border-cyan-600 py-1.5 px-2 text-gray-900 text-right"
+                        placeholder="0.00"
                       />
-                      {isDocNoLoading && (
-                        <div className="absolute right-2 top-1/2 transform -translate-y-1/2">
-                          <PuffLoader size={20} color="#6366f1" />
-                        </div>
-                      )}
                     </div>
                   </div>
-                </div>
-
-                <div className="sm:col-span-2">
-                  <label className="block text-sm font-medium leading-6 text-gray-900">
-                    Attendee
-                  </label>
-                  <div className="mt-2">
-                    <input
-                      type="text"
-                      value={invoiceNo}
-                      onChange={(e) => setInvoiceNo(e.target.value)}
-                      className="block w-full rounded-md border border-cyan-600 py-1.5 px-2 text-gray-900"
-                    />
-                  </div>
-                </div>
-                <div className="sm:col-span-2">
-                  <label className="block text-sm font-medium leading-6 text-gray-900">
-                    Quotation Date
-                  </label>
-                  <div className="mt-2 w-full">
-                    <DatePicker
-                      selected={invoiceDate}
-                      onChange={(date) => setInvoiceDate(date)}
-                      className="block w-full rounded-md border border-cyan-600 py-1.5 px-2 text-gray-900"
-                      dateFormat="yyyy-MM-dd"
-                      maxDate={new Date()}
-                      placeholderText="Select Quotation Date"
-                      isClearable
-                      showMonthDropdown
-                      showYearDropdown
-                      dropdownMode="scroll"
-                    />
-                  </div>
-                </div>
-
-                {/* <div className="sm:col-span-2">
-                  <label className="block text-sm font-medium leading-6 text-gray-900">
-                    GRN Number
-                  </label>
-                  <div className="mt-2">
-                    <input
-                      type="text"
-                      className="block w-full rounded-md border border-cyan-600 py-1.5 px-2 text-gray-900"
-                    />
-                  </div>
-                </div> */}
-
-                <div className="sm:col-span-2">
-                  <label className="block text-sm font-medium leading-6 text-gray-900">
-                    Amount
-                  </label>
-                  <div className="mt-2">
-                    <input
-                      type="text"
-                      value={formatAmount(amount)}
-                      onChange={(e) => {
-                        const value = e.target.value.replace(/,/g, "");
-                        if (!isNaN(value) || value === "" || value === ".") {
-                          setAmount(value);
-                        }
-                      }}
-                      onBlur={(e) => {
-                        const rawValue = e.target.value.replace(/,/g, "");
-                        if (rawValue) {
-                          const numericValue = parseFloat(rawValue) || 0;
-                          setAmount(numericValue.toFixed(2));
-                        }
-                      }}
-                      className="block w-full rounded-md border border-cyan-600 py-1.5 px-2 text-gray-900 text-right"
-                      placeholder="0.00"
-                    />
-                  </div>
-                </div>
-
-                <div className="sm:col-span-2">
-                  <label className="block text-sm font-medium leading-6 text-gray-900">
-                    Currency
-                  </label>
-                  <div className="mt-2">
-                    <select
-                      required
-                      value={currencyType}
-                      onChange={(e) => setCurrencyType(e.target.value)}
-                      className="block w-full rounded-md border border-cyan-600 py-1.5 px-2 text-gray-900"
-                    >
-                      <option value="" disabled>
-                        Select Currency
-                      </option>
-                      <option value="LKR">LKR</option>
-                      <option value="USD">USD</option>
-                    </select>
-                  </div>
-                </div>
-
-                <div className="sm:col-span-2">
-                  <label className="block text-sm font-medium leading-6 text-gray-900">
-                    Payment Terms
-                  </label>
-                  <div className="mt-2">
-                    <select
-                      required
-                      onChange={(e) => setPaymentType(e.target.value)}
-                      className="block w-full rounded-md border border-cyan-600 py-1.5 px-2 text-gray-900"
-                    >
-                      <option value="" disabled>
-                        Select Payment Terms
-                      </option>
-                      {paymentTerms.map((term) => (
-                        <option key={term} value={term}>
-                          {term}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                </div>
-
-                <div className="sm:col-span-2">
-                  <label className="block text-sm font-medium leading-6 text-gray-900">
-                    Handover Date
-                  </label>
-                  <div className="mt-2">
-                    <DatePicker
-                      selected={handoverDate}
-                      onChange={(date) => setHandoverDate(date || new Date())}
-                      className="block w-full rounded-md border border-cyan-600 py-1.5 px-2 text-gray-900"
-                      dateFormat="yyyy-MM-dd"
-                      maxDate={new Date()}
-                      placeholderText="Select handover date"
-                      isClearable
-                      showMonthDropdown
-                      showYearDropdown
-                      dropdownMode="scroll"
-                      allowSameDay
-                    />
-                  </div>
-                </div>
-
-                <div className="sm:col-span-2">
-                  <label className="block text-sm font-medium leading-6 text-gray-900">
-                    Handover To
-                  </label>
-                  <div className="mt-2">
-                    <select
-                      required
-                      value={selectedReceiver}
-                      onChange={(e) => setSelectedReceiver(e.target.value)}
-                      className="block w-full rounded-md border border-cyan-600 py-1.5 px-2 text-gray-900"
-                    >
-                      <option value="" disabled>
-                        Select a receiver
-                      </option>
-                      {receivers && receivers.length > 0 ? (
-                        receivers.map((item, index) => (
-                          <option key={index} value={item.id}>
-                            {item.name}
-                          </option>
-                        ))
-                      ) : (
+                  <div className="sm:col-span-2">
+                    <label className="block text-sm font-medium leading-6 text-gray-900">
+                      Currency
+                    </label>
+                    <div className="mt-2">
+                      <select
+                        required
+                        value={currencyType}
+                        onChange={(e) => setCurrencyType(e.target.value)}
+                        className="block w-full rounded-md border border-cyan-600 py-1.5 px-2 text-gray-900"
+                      >
                         <option value="" disabled>
-                          No receivers available
+                          Select Currency
                         </option>
-                      )}
-                    </select>
+                        <option value="LKR">LKR</option>
+                        <option value="USD">USD</option>
+                      </select>
+                    </div>
                   </div>
-                </div>
-
-                <div className="sm:col-span-2">
-                  <label className="block text-sm font-medium leading-6 text-gray-900">
-                    Created By
-                  </label>
-                  <div className="mt-2">
-                    <input
-                      type="text"
-                      value={user?.username || ""}
-                      readOnly
-                      disabled
-                      className="block w-full rounded-md border border-cyan-600 py-1.5 px-2 text-gray-900"
-                    />
-                  </div>
-                </div>
-
-                <div className="sm:col-span-2">
-                  <label
-                    className="block mb-2 text-sm font-medium text-gray-900 dark:text-white"
-                    htmlFor="file_input"
-                  >
-                    Upload file
-                  </label>
-                  <input
-                    className="block w-full text-sm text-gray-900 border border-gray-300 rounded-lg cursor-pointer bg-gray-50 dark:text-gray-400 focus:outline-none dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400"
-                    aria-describedby="file_input_help"
-                    id="file_input"
-                    type="file"
-                    onChange={handleFileChange}
-                  />
-                  <p
-                    className="mt-1 text-sm text-gray-500 dark:text-gray-300"
-                    id="file_input_help"
-                  >
-                    PNG or JPG (MAX. File size 2MB).
-                  </p>
-                </div>
-
-                <div className="sm:col-span-2">
-                  <label className="block text-sm font-medium leading-6 text-gray-900">
-                    Advance Payment
-                  </label>
-                  <div className="mt-2">
-                    <label className="relative inline-flex items-center cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={isAdvancePayment}
-                        onChange={() => setIsAdvancePayment(!isAdvancePayment)}
-                        className="sr-only peer"
-                      />
-                      <div className="relative w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 dark:peer-focus:ring-blue-800 rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-blue-600"></div>
-                      <span className="ml-3 text-sm font-medium text-gray-900">
-                        {isAdvancePayment ? "" : ""}
-                      </span>
+                  <div className="sm:col-span-2">
+                    <label className="block text-sm font-medium leading-6 text-gray-900">
+                      Transaction Type
                     </label>
+                    <div className="mt-2">
+                      <select
+                        required
+                        value={formData.transactionType}
+                        onChange={(e) =>
+                          setFormData((prev) => ({
+                            ...prev,
+                            transactionType: e.target.value,
+                          }))
+                        }
+                        className="block w-full rounded-md border border-cyan-600 py-1.5 px-2 text-gray-900"
+                      >
+                        <option value="" disabled>
+                          Select Transaction Type
+                        </option>
+                        <option value="Repair">Repair</option>
+                        <option value="Service">Service</option>
+                        <option value="Capital">Capital Expenditure</option>
+                      </select>
+                    </div>
                   </div>
-                </div>
-
-                <div className="sm:col-span-2">
-                  <label className="block text-sm font-medium leading-6 text-gray-900">
-                    Complete
-                  </label>
-                  <div className="mt-2">
-                    <label className="relative inline-flex items-center cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={isComplete}
-                        onChange={() => setIsComplete(!isComplete)}
-                        className="sr-only peer"
-                      />
-                      <div className="relative w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 dark:peer-focus:ring-blue-800 rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-blue-600"></div>
-                      <span className="ml-3 text-sm font-medium text-gray-900">
-                        {isComplete ? "" : ""}
-                      </span>
+                  <div className="sm:col-span-2">
+                    <label className="block text-sm font-medium leading-6 text-gray-900">
+                      Description
                     </label>
+                    <div className="mt-2">
+                      <textarea
+                        value={formData.description || ""}
+                        onChange={(e) =>
+                          setFormData((prev) => ({
+                            ...prev,
+                            description: e.target.value,
+                          }))
+                        }
+                        rows={3}
+                        className="block w-full rounded-md border border-cyan-600 py-1.5 px-2 text-gray-900"
+                      />
+                    </div>
                   </div>
-                </div>
-
-                <div className="sm:col-span-4">
-                  <label className="block text-sm font-medium leading-6 text-gray-900">
-                    Remarks
-                  </label>
-                  <div className="mt-2">
-                    <textarea
-                      value={remark}
-                      onChange={(e) => setRemark(e.target.value)}
-                      rows={4}
-                      className="block w-full rounded-md border border-cyan-600 py-1.5 text-gray-900"
-                    />
+                  <div className="sm:col-span-2">
+                    <label className="block text-sm font-medium leading-6 text-gray-900">
+                      Attendee
+                    </label>
+                    <div className="mt-2">
+                      <input
+                        type="text"
+                        value={formData.attendee}
+                        onChange={(e) =>
+                          setFormData((prev) => ({
+                            ...prev,
+                            attendee: e.target.value,
+                          }))
+                        }
+                        className="block w-full rounded-md border border-cyan-600 py-1.5 px-2 text-gray-900"
+                      />
+                    </div>
+                  </div>
+                  <div className="sm:col-span-2">
+                    <label className="block text-sm font-medium leading-6 text-gray-900">
+                      Remarks
+                    </label>
+                    <div className="mt-2">
+                      <textarea
+                        value={remark}
+                        onChange={(e) => setRemark(e.target.value)}
+                        rows={3}
+                        className="block w-full rounded-md border border-cyan-600 py-1.5 px-2 text-gray-900"
+                      />
+                    </div>
                   </div>
                 </div>
               </div>
             </div>
 
+            <div className="mt-8 border-t border-gray-900/10 pt-8">
+              <h2 className="text-base font-semibold leading-7 text-gray-900">
+                Items
+              </h2>
+              <div className="mt-4">
+                <table className="min-w-full divide-y divide-gray-200">
+                  <thead>
+                    <tr>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
+                        Description
+                      </th>
+                      <th className="px-1 py-3 text-center text-xs font-medium text-gray-500 uppercase">
+                        Quantity
+                      </th>
+                      <th className="px-1 py-3 text-center text-xs font-medium text-gray-500 uppercase">
+                        Unit Price
+                      </th>
+                      <th className="px-1 py-3 text-center text-xs font-medium text-gray-500 uppercase">
+                        Total
+                      </th>
+                      <th className="px-1 py-3 text-center text-xs font-medium text-gray-500 uppercase">
+                        Action
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {items.map((item, index) => (
+                      <tr key={index}>
+                        <td className="px-6 py-2 ">
+                          <input
+                            type="text"
+                            value={item.description}
+                            onChange={(e) =>
+                              updateItem(index, "description", e.target.value)
+                            }
+                            className="w-full border border-gray-300 rounded-md p-2"
+                            placeholder="Enter Description Here"
+                          />
+                        </td>
+                        <td className="px-1 py-2 justify-center text-center">
+                          <input
+                            type="number"
+                            value={item.quantity}
+                            onChange={(e) =>
+                              updateItem(index, "quantity", e.target.value)
+                            }
+                            className="w-16 border border-gray-300 rounded-md p-2 text-right"
+                            min="1"
+                          />
+                        </td>
+                        <td className="px-1 py-2  justify-center text-center">
+                          <input
+                            type="text"
+                            value={formatAmount(item.unitPrice)}
+                            onChange={(e) =>
+                              updateItem(index, "unitPrice", e.target.value)
+                            }
+                            className="w-32 border border-gray-300 rounded-md p-2 text-right"
+                          />
+                        </td>
+                        <td className="px-1 py-2 justify-center text-center ">
+                          <input
+                            type="text"
+                            disabled
+                            className="w-32 border border-gray-300 rounded-md p-2 text-right"
+                            value={formatAmount(item.totalPrice)}
+                          />
+                        </td>
+                        <td className="px-1 py-2 text-center">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const newItems = items.filter(
+                                (_, i) => i !== index
+                              );
+                              setItems(newItems);
+                              calculateTotals(newItems);
+                            }}
+                            className="text-red-600 hover:text-red-900"
+                          >
+                            <LuTrash2 className="text-lg" />
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                <button
+                  type="button"
+                  onClick={addItem}
+                  className="mt-4 ml-3 border border-blue-500 px-2 py-1  hover:bg-blue-700 hover:text-white duration-300 ease-in-out rounded-lg text-blue-600 flex items-center justify-center gap-2"
+                >
+                  <HiOutlinePlusCircle
+                    className="text-lg cursor-pointer"
+                    data-tooltip-id="item-tooltip"
+                    data-tooltip-content="Add Item"
+                  />
+                  <span>New</span>
+                  <Tooltip id="item-tooltip" place="right" effect="solid" />
+                </button>
+              </div>
+            </div>
+
+            <div className="mt-8 border-t border-gray-900/10 pt-8">
+              <div className="mt-4 flex flex-col gap-4 p-4 border rounded-md bg-gray-50">
+                <table className="w-full">
+                  <tbody>
+                    <tr>
+                      <td className="text-right pb-4">Subtotal:</td>
+                      <td className="text-right pb-4 pl-4 w-48">
+                        {formatAmount(calculations.subtotal)}
+                      </td>
+                    </tr>
+                    <tr>
+                      <td className="text-right pb-4">
+                        <div className="flex items-center justify-end gap-2">
+                          <span>Discount:</span>
+                          <select
+                            value={calculations.discountType}
+                            onChange={(e) =>
+                              setCalculations({
+                                ...calculations,
+                                discountType: e.target.value,
+                              })
+                            }
+                            className="w-24 border rounded-md px-2 py-1"
+                          >
+                            <option value="percentage">%</option>
+                            <option value="fixed">Fixed</option>
+                          </select>
+                          <input
+                            type="text"
+                            value={calculations.discountValue}
+                            onChange={(e) =>
+                              handleFloatInput(e, "discountValue")
+                            }
+                            className="w-28 border rounded-md px-2 py-1 text-right"
+                            placeholder="0.00"
+                          />
+                        </div>
+                      </td>
+                      <td className="text-right pb-4 pl-4 w-48 text-red-600">
+                        -{formatAmount(calculations.discountAmount || 0)}
+                      </td>
+                    </tr>
+                    <tr>
+                      <td className="text-right pb-4">
+                        <div className="flex items-center justify-end gap-2">
+                          <span>VAT:</span>
+                          <select
+                            value={calculations.vatType}
+                            onChange={(e) =>
+                              setCalculations({
+                                ...calculations,
+                                vatType: e.target.value,
+                              })
+                            }
+                            className="w-24 border rounded-md px-2 py-1"
+                          >
+                            <option value="percentage">%</option>
+                            <option value="fixed">Fixed</option>
+                          </select>
+                          <input
+                            type="text"
+                            value={calculations.vatValue}
+                            onChange={(e) => handleFloatInput(e, "vatValue")}
+                            className="w-28 border rounded-md px-2 py-1 text-right"
+                            placeholder="0.00"
+                          />
+                        </div>
+                      </td>
+                      <td className="text-right pb-4 pl-4 w-48">
+                        {formatAmount(calculations.vatAmount || 0)}
+                      </td>
+                    </tr>
+                    <tr>
+                      <td className="text-right pb-4">
+                        <div className="flex items-center justify-end gap-2">
+                          <span>Tax:</span>
+                          <select
+                            value={calculations.taxType}
+                            onChange={(e) =>
+                              setCalculations({
+                                ...calculations,
+                                taxType: e.target.value,
+                              })
+                            }
+                            className="w-24 border rounded-md px-2 py-1"
+                          >
+                            <option value="percentage">%</option>
+                            <option value="fixed">Fixed</option>
+                          </select>
+                          <input
+                            type="text"
+                            value={calculations.taxValue}
+                            onChange={(e) => handleFloatInput(e, "taxValue")}
+                            className="w-28 border rounded-md px-2 py-1 text-right"
+                            placeholder="0.00"
+                          />
+                        </div>
+                      </td>
+                      <td className="text-right pb-4 pl-4 w-48">
+                        {formatAmount(calculations.taxAmount || 0)}
+                      </td>
+                    </tr>
+                    <tr className="border-t">
+                      <td className="text-right pt-4 font-semibold">Total:</td>
+                      <td className="text-right pt-4 pl-4 w-48 font-semibold text-lg">
+                        {formatAmount(calculations.total)}
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <div className="mt-8 border-t border-gray-900/10 pt-8">
+              <h2 className="text-base font-semibold leading-7 text-gray-900">
+                Terms and Conditions
+              </h2>
+
+              <div className="mt-4 grid grid-cols-1 gap-6 sm:grid-cols-3">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700">
+                    Payment Terms
+                  </label>
+                  <input
+                    type="text"
+                    value={formData.terms.payment}
+                    onChange={(e) =>
+                      handleTermChange("payment", e.target.value)
+                    }
+                    className="mt-1 block w-full rounded-md border border-gray-300 py-1.5 px-2"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700">
+                    Warranty Terms
+                  </label>
+                  <input
+                    type="text"
+                    value={formData.terms.warranty}
+                    onChange={(e) =>
+                      handleTermChange("warranty", e.target.value)
+                    }
+                    className="mt-1 block w-full rounded-md border border-gray-300 py-1.5 px-2"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700">
+                    AMC Terms
+                  </label>
+                  <input
+                    type="text"
+                    value={formData.terms.amc}
+                    onChange={(e) => handleTermChange("amc", e.target.value)}
+                    className="mt-1 block w-full rounded-md border border-gray-300 py-1.5 px-2"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700">
+                    Delivery Terms
+                  </label>
+                  <input
+                    type="text"
+                    value={formData.terms.delivery}
+                    onChange={(e) =>
+                      handleTermChange("delivery", e.target.value)
+                    }
+                    className="mt-1 block w-full rounded-md border border-gray-300 py-1.5 px-2"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700">
+                    Installation Terms
+                  </label>
+                  <input
+                    type="text"
+                    value={formData.terms.installation}
+                    onChange={(e) =>
+                      handleTermChange("installation", e.target.value)
+                    }
+                    className="mt-1 block w-full rounded-md border border-gray-300 py-1.5 px-2"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700">
+                    Validity
+                  </label>
+                  <input
+                    type="text"
+                    value={formData.terms.validity}
+                    onChange={(e) =>
+                      handleTermChange("validity", e.target.value)
+                    }
+                    className="mt-1 block w-full rounded-md border border-gray-300 py-1.5 px-2"
+                  />
+                </div>
+              </div>
+            </div>
             <div className="mt-6 flex items-center justify-end gap-x-6">
               <button
                 type="button"
@@ -630,4 +948,5 @@ const POForm = () => {
     </div>
   );
 };
+
 export default POForm;

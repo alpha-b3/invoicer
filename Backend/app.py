@@ -1244,114 +1244,97 @@ def create_purchase_order():
         token = auth_header.split(" ")[1]
         decoded_token = jwt.decode(token, SECRET_KEY, algorithms=['HS256'])
         created_by = decoded_token['user_id']
+        current_time = datetime.now()
 
         # Start transaction
         conn = get_db_connection()
         cursor = conn.cursor()
 
-        try:
-            # Safe float conversion helper
-            def safe_float(value, default=0.0):
-                try:
-                    if value is None or value == '':
-                        return default
-                    if isinstance(value, str):
-                        value = value.replace(',', '')
-                    return float(value)
-                except (ValueError, TypeError):
-                    return default
+        # 1. Insert PO Header
+        header_query = """
+        INSERT INTO PO_Header (
+            PONumber, SID, DID, Attendee, Description, QuotationDate, 
+            Currency, Status, Total, isCreated, isApproved, isCancelled, isPrinted,
+            CreatedAt, CreatedBy, Remark, DiscountPercentage, DiscountAmount,
+            VATPercentage, VATAmount, TaxPercentage, TaxAmount, Type
+        ) OUTPUT INSERTED.POHeaderID
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """
 
-            # 1. First insert the header
-            header_query = """
-            INSERT INTO PO_Header (
-                PONumber, SID, DID, Attendee, Description, QuotationDate, 
-                Currency, Status, Total, isCreated, Remark,
-                DiscountPercentage, DiscountAmount, VATPercentage, VATAmount,
-                TaxPercentage, TaxAmount, CreatedAt, CreatedBy,
-                isApproved, isCancelled, isPrinted
-            ) OUTPUT INSERTED.POHeaderID
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, GETDATE(), ?, ?, ?, ?)
-            """
+        header_values = (
+            data['PONumber'],
+            data['SID'],
+            data['DID'],
+            data['Attendee'],
+            data['Description'],
+            data['QuotationDate'],
+            data['Currency'],
+            data['Status'],
+            data['Total'],
+            data['isCreated'],
+            data['isApproved'],
+            data['isCancelled'],
+            data['isPrinted'],
+            current_time,
+            created_by,
+            data['Remark'],
+            data['DiscountPercentage'],
+            data['DiscountAmount'],
+            data['VATPercentage'],
+            data['VATAmount'],
+            data['TaxPercentage'],
+            data['TaxAmount'],
+            data['Type']
+        )
 
-            header_values = (
-                data['poNumber'],
-                data['supplierId'],
-                data.get('DID'),
-                data.get('attendee', ''),
-                data.get('description', ''),
-                data['date'],
-                data['currency'],
-                1,  # Status
-                safe_float(data['total']),
-                1,  # isCreated
-                data.get('remark', ''),
-                safe_float(data['discountValue']) if data.get('discountType') == 'percentage' else 0,
-                safe_float(data['discountValue']) if data.get('discountType') == 'amount' else 0,
-                safe_float(data['vatValue']) if data.get('vatType') == 'percentage' else 0,
-                safe_float(data['vatValue']) if data.get('vatType') == 'amount' else 0,
-                safe_float(data['taxValue']) if data.get('taxType') == 'percentage' else 0,
-                safe_float(data['taxValue']) if data.get('taxType') == 'amount' else 0,
-                created_by,
-                0,  # isApproved
-                0,  # isCancelled
-                0   # isPrinted
+        cursor.execute(header_query, header_values)
+        po_header_id = cursor.fetchone()[0]
+
+        # 2. Insert PO Details
+        detail_query = """
+        INSERT INTO PO_Detail (
+            POHeaderID, Description, LineID, Qty, UnitPrice, Total,
+            PaymenTerms, Warranty, AMCTerms, DeliveryTerms, Installation,
+            Validity, CreatedAt, CreatedBy
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """
+
+        # Insert each line item
+        for item in data['items']:
+            detail_values = (
+                po_header_id,
+                item['Description'],
+                item['LineID'],
+                item['Qty'],
+                item['UnitPrice'],
+                item['Total'],
+                item['PaymenTerms'],
+                item['Warranty'],
+                item['AMCTerms'],
+                item['DeliveryTerms'],
+                item['Installation'],
+                item['Validity'],
+                current_time,
+                created_by
             )
+            cursor.execute(detail_query, detail_values)
 
-            # Execute header insert and get the ID
-            cursor.execute(header_query, header_values)
-            po_header_id = cursor.fetchone()[0]  # Get the inserted ID
-            
-            # 2. Then insert the details using the header ID
-            detail_query = """
-            INSERT INTO PO_Detail (
-                POHeaderID, Description, LineID, Qty, UnitPrice, Total,
-                PaymenTerms, Warranty, AMCTerms, DeliveryTerms, Installation,
-                Validity, CreatedAt, CreatedBy
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, GETDATE(), ?)
-            """
-
-            # Insert each line item
-            for index, item in enumerate(data['items'], 1):  # Start index at 1
-                detail_values = (
-                    po_header_id,  # Use the ID from header insert
-                    item['description'],
-                    index,
-                    safe_float(item['quantity']),
-                    safe_float(item['unitPrice']),
-                    safe_float(item['totalPrice']),
-                    data['terms']['payment'],
-                    data['terms']['warranty'],
-                    data['terms']['amc'],
-                    data['terms']['delivery'],
-                    data['terms']['installation'],
-                    data['terms']['validity'],
-                    created_by
-                )
-                cursor.execute(detail_query, detail_values)
-
-            # If everything succeeded, commit the transaction
-            conn.commit()
-            return jsonify({
-                "message": "Purchase order created successfully",
-                "poHeaderId": po_header_id
-            }), 201
-
-        except Exception as e:
-            # If any error occurs, rollback both inserts
-            if conn:
-                conn.rollback()
-            raise e
+        conn.commit()
+        return jsonify({
+            "message": "Purchase order created successfully",
+            "poHeaderId": po_header_id
+        }), 201
 
     except Exception as e:
-        print(f"Error creating PO: {str(e)}")  # Add logging
+        if conn:
+            conn.rollback()
         return jsonify({"error": str(e)}), 500
-
     finally:
         if cursor:
             cursor.close()
         if conn:
             conn.close()
-            
+
 @app.route('/api/po/approvals', methods=['GET'])
 def get_purchase_orders():
     conn = None

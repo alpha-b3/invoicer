@@ -5,39 +5,45 @@ import {
   LASTPONO,
   UPDATEPO,
   GETPODETAILS,
-  // DEPARTMENTS,
+  DEPARTMENTS,
 } from "../api/api";
 
 export const getLastPONumber = async () => {
   try {
-    const response = await fetch(getApiUrl(LASTPONO));
+    const response = await fetch(getApiUrl(LASTPONO), {
+      method: "GET",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${localStorage.getItem("token")}`,
+      },
+    });
+
     if (!response.ok) {
-      throw new Error("Failed to fetch last PO number");
+      throw new Error("Failed to fetch PO number");
     }
+
     const data = await response.json();
-    return data.poNumber;
+    return data.poNumber; // Returns in format YYYY/XXXX
   } catch (error) {
-    console.error("Error fetching last PO number:", error);
-    throw error;
+    console.error("Error fetching PO number:", error);
+    // Generate fallback PO number
+    const currentYear = new Date().getFullYear();
+    return `${currentYear}/0001`;
   }
 };
 
 export const createPurchaseOrder = async (poData) => {
   try {
-    // Clean up the data before sending
-    const cleanedData = {
-      ...poData,
-      items: poData.items.map((item) => ({
-        ...item,
-        quantity: item.quantity || 0,
-        unitPrice: item.unitPrice || "0",
-        totalPrice: item.totalPrice || "0.00",
-      })),
-      discountValue: poData.discountValue || "0",
-      vatValue: poData.vatValue || "0",
-      taxValue: poData.taxValue || "0",
-      total: poData.total || "0.00",
-    };
+    // Input validation
+    const requiredFields = [
+      'PONumber', 'SID', 'DID', 'Attendee', 'QuotationDate', 
+      'Currency', 'Total', 'Type'
+    ];
+
+    const missingFields = requiredFields.filter(field => !poData[field]);
+    if (missingFields.length > 0) {
+      throw new Error(`Missing required fields: ${missingFields.join(', ')}`);
+    }
 
     const response = await fetch(getApiUrl(CREATEPO), {
       method: "POST",
@@ -45,11 +51,12 @@ export const createPurchaseOrder = async (poData) => {
         "Content-Type": "application/json",
         Authorization: `Bearer ${localStorage.getItem("token")}`,
       },
-      body: JSON.stringify(cleanedData),
+      body: JSON.stringify(poData),
     });
 
     if (!response.ok) {
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      throw new Error(errorData.error || 'Failed to create purchase order');
     }
 
     const data = await response.json();
@@ -168,18 +175,77 @@ export const getPOForPDF = async (poId) => {
     throw error;
   }
 };
-// export const getDepartments = async () => {
-//   try {
-//     const apiUrl = getApiUrl(DEPARTMENTS);
-//     const response = await fetch(apiUrl);
-//     if (response.ok) return await response.json();
-//     else {
-//       const error = await response.json();
-//       console.error("Error:", error);
-//       throw new Error(error.message || "Failed to fetch departments");
-//     }
-//   } catch (error) {
-//     console.error("Error fetching departments:", error);
-//     throw error;
-//   }
-// };
+
+export const handleSubmit = async (poData) => {
+  try {
+    // Transform the data to match DB field names exactly
+    const formattedData = {
+      PONumber: poData.poNumber,
+      SID: parseInt(poData.supplierId),
+      DID: parseInt(poData.DID),
+      Attendee: poData.attendee || "",
+      Description: poData.description || "",
+      QuotationDate: poData.date,
+      Currency: poData.currency,
+      Status: 1,
+      Total: parseFloat(poData.total),
+      isCreated: 1,
+      isApproved: 0,
+      isCancelled: 0,
+      isPrinted: 0,
+      Remark: poData.remark || "",
+      Type: poData.type,
+      DiscountPercentage:
+        poData.discountType === "percentage"
+          ? parseFloat(poData.discountValue) || 0
+          : 0,
+      DiscountAmount:
+        poData.discountType === "fixed"
+          ? parseFloat(poData.discountValue) || 0
+          : 0,
+      VATPercentage:
+        poData.vatType === "percentage" ? parseFloat(poData.vatValue) || 0 : 0,
+      VATAmount:
+        poData.vatType === "fixed" ? parseFloat(poData.vatValue) || 0 : 0,
+      TaxPercentage:
+        poData.taxType === "percentage" ? parseFloat(poData.taxValue) || 0 : 0,
+      TaxAmount:
+        poData.taxType === "fixed" ? parseFloat(poData.taxValue) || 0 : 0,
+      items: poData.items.map((item, index) => ({
+        Description: item.description,
+        LineID: index + 1,
+        Qty: parseFloat(item.quantity),
+        UnitPrice: parseFloat(item.unitPrice),
+        Total: parseFloat(item.totalPrice),
+        PaymenTerms: poData.terms.payment || "",
+        Warranty: poData.terms.warranty || "",
+        AMCTerms: poData.terms.amc || "",
+        DeliveryTerms: poData.terms.delivery || "",
+        Installation: poData.terms.installation || "",
+        Validity: poData.terms.validity || "",
+      })),
+    };
+
+    // Log the formatted data for debugging
+    console.log("Sending PO data:", formattedData);
+
+    const response = await fetch("/api/po/create", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${localStorage.getItem("token")}`,
+      },
+      body: JSON.stringify(formattedData),
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.message || "Failed to create purchase order");
+    }
+
+    return await response.json();
+  } catch (error) {
+    console.error("Error in handleSubmit:", error);
+    throw error;
+  }
+};
